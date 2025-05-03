@@ -142,7 +142,7 @@ class ChatService {
 
   // Ask Gemini AI for an answer
   static Future<String> askGemini(String query) async {
-    const apiKey = 'AIzaSyBBsD6c_V4-oQGPCOdZZS-BHYK3O176QJY';
+    const apiKey = 'your_api_key_here';
     final url = Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey',
     );
