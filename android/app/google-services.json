@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "818577713656",
+    "project_id": "chatbot-414ba",
+    "storage_bucket": "chatbot-414ba.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:818577713656:android:1659335641d159ab8e0e0d",
+        "android_client_info": {
+          "package_name": "com.example.aichat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCH_sW6W8WcI3YnpkqMjc7PChnq2_8wECU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
