@@ -3,10 +3,143 @@ import 'package:aichat/models/chat_message.dart';
 import 'package:uuid/uuid.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class ChatService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final _uuid = Uuid();
+  static bool _isOfflineMode = false;
+
+  // Initialize and check connectivity
+  static Future<void> initialize() async {
+    final connectivityResult = await Connectivity().checkConnectivity();
+    _isOfflineMode = connectivityResult == ConnectivityResult.none;
+
+    // Load local data from assets if offline mode is detected
+    if (_isOfflineMode) {
+      await _loadLocalJsonData();
+    }
+
+    // Monitor connectivity changes
+    Connectivity()
+        .onConnectivityChanged
+        .listen((List<ConnectivityResult> results) {
+      _isOfflineMode =
+          results.contains(ConnectivityResult.none) || results.isEmpty;
+    });
+  }
+
+  // Load local.json data
+  static Future<void> _loadLocalJsonData() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/local.json');
+
+      if (!file.existsSync()) {
+        // Create the file with initial structure if it doesn't exist
+        final initialContent = json.encode({"qa_pairs": []});
+        await file.writeAsString(initialContent);
+      }
+    } catch (e) {
+      print('Error loading local data: $e');
+    }
+  }
+
+  // Get local storage file path
+  static Future<File> _getLocalFile() async {
+    final directory = await getApplicationDocumentsDirectory();
+    return File('${directory.path}/local.json');
+  }
+
+  // Read from local storage
+  static Future<Map<String, dynamic>> _readLocalData() async {
+    try {
+      final file = await _getLocalFile();
+      if (!file.existsSync()) return {"qa_pairs": []};
+
+      final contents = await file.readAsString();
+      return json.decode(contents);
+    } catch (e) {
+      print('Error reading local data: $e');
+      return {"qa_pairs": []};
+    }
+  }
+
+  // Write to local storage
+  static Future<void> _writeLocalData(Map<String, dynamic> data) async {
+    try {
+      final file = await _getLocalFile();
+      await file.writeAsString(json.encode(data));
+    } catch (e) {
+      print('Error writing local data: $e');
+    }
+  }
+
+  // Save question and answer to local.json
+  static Future<void> saveQuestionAnswerLocally({
+    required String question,
+    required String answer,
+    List<String> tags = const [],
+  }) async {
+    try {
+      final data = await _readLocalData();
+
+      data['qa_pairs'].add({
+        'question': question,
+        'answer': answer,
+        'tags': tags,
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+
+      await _writeLocalData(data);
+    } catch (e) {
+      print('Error saving to local data: $e');
+    }
+  }
+
+  // Search in local storage
+  static Future<String?> searchInLocalStorage(String query) async {
+    try {
+      final data = await _readLocalData();
+      final qaList = List<Map<String, dynamic>>.from(data['qa_pairs']);
+
+      List<Map<String, dynamic>> matches = [];
+      final queryLower = query.toLowerCase();
+
+      for (var qa in qaList) {
+        final question = qa['question'].toString().toLowerCase();
+
+        // Direct match
+        if (question == queryLower) {
+          return qa['answer'];
+        }
+
+        // Partial match
+        if (question.contains(queryLower)) {
+          final score = queryLower.length / question.length;
+          matches.add({
+            'score': score,
+            'answer': qa['answer'],
+          });
+        }
+      }
+
+      matches.sort(
+          (a, b) => (b['score'] as double).compareTo(a['score'] as double));
+
+      if (matches.isNotEmpty) {
+        return matches.first['answer'];
+      }
+
+      return null;
+    } catch (e) {
+      print('Error searching local data: $e');
+      return null;
+    }
+  }
 
   // Save message to Firestore
   static Future<ChatMessage> saveMessage({
@@ -27,7 +160,11 @@ class ChatService {
       sessionId: sessionId ?? _uuid.v4(),
     );
 
-    await messageRef.set(message.toMap());
+    // In offline mode, we'll just return the message object without saving to Firestore
+    if (!_isOfflineMode) {
+      await messageRef.set(message.toMap());
+    }
+
     return message;
   }
 
@@ -46,6 +183,11 @@ class ChatService {
   // Get chat sessions for a user
   static Future<List<Map<String, dynamic>>> getChatSessions(
       String userId) async {
+    if (_isOfflineMode) {
+      // In offline mode, return an empty list or cached sessions
+      return [];
+    }
+
     // Get all messages for this user
     final messagesQuery = await _firestore
         .collection('messages')
@@ -92,6 +234,8 @@ class ChatService {
 
   // Delete a chat session and all its messages
   static Future<void> deleteSession(String sessionId) async {
+    if (_isOfflineMode) return;
+
     final batch = _firestore.batch();
 
     final messagesQuery = await _firestore
@@ -106,8 +250,16 @@ class ChatService {
     await batch.commit();
   }
 
+  // Check if the device is offline
+  static bool get isOffline => _isOfflineMode;
+
   // Search in Firestore for matching questions
   static Future<String?> searchInFirestore(String query) async {
+    // In offline mode, search in local storage instead
+    if (_isOfflineMode) {
+      return await searchInLocalStorage(query);
+    }
+
     final snapshot = await _firestore.collection('questions').get();
 
     List<Map<String, dynamic>> matches = [];
@@ -142,6 +294,11 @@ class ChatService {
 
   // Ask Gemini AI for an answer
   static Future<String> askGemini(String query) async {
+    // Check if offline
+    if (_isOfflineMode) {
+      return "Интернэт холболт байхгүй байна. Оффлайн горимд Gemini ашиглах боломжгүй.";
+    }
+
     const apiKey = 'your_api_key_here';
     final url = Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey',
@@ -197,17 +354,39 @@ class ChatService {
     required String answer,
     List<String> tags = const ['gemini-generated'],
   }) async {
-    await _firestore.collection('questions').add({
-      'question': question,
-      'answer': answer,
-      'tags': tags,
-      'createdAt': Timestamp.now(),
-      'createdBy': 'system',
-    });
+    // Save to Firestore if online
+    if (!_isOfflineMode) {
+      await _firestore.collection('questions').add({
+        'question': question,
+        'answer': answer,
+        'tags': tags,
+        'createdAt': Timestamp.now(),
+        'createdBy': 'system',
+      });
+    }
+
+    // Also save locally for offline access
+    await saveQuestionAnswerLocally(
+      question: question,
+      answer: answer,
+      tags: tags,
+    );
   }
 
   // Get statistics for admin dashboard
   static Future<Map<String, dynamic>> getStats() async {
+    if (_isOfflineMode) {
+      return {
+        'totalQuestions': 0,
+        'aiGeneratedQuestions': 0,
+        'manualQuestions': 0,
+        'totalUsers': 0,
+        'totalMessages': 0,
+        'recentMessages': 0,
+        'offlineMode': true,
+      };
+    }
+
     final Map<String, dynamic> stats = {};
 
     // Total questions count
@@ -248,13 +427,31 @@ class ChatService {
   // Get messages for a specific session as a list (not stream)
   static Future<List<ChatMessage>> getSessionMessagesAsList(
       String sessionId) async {
-    final snapshot = await _firestore
+    if (_isOfflineMode) {
+      // Return empty list in offline mode
+      return [];
+    }
+
+    final messagesQuery = await _firestore
         .collection('messages')
         .where('sessionId', isEqualTo: sessionId)
         .orderBy('timestamp')
         .get();
 
-    return snapshot.docs.map((doc) => ChatMessage.fromFirestore(doc)).toList();
+    return messagesQuery.docs
+        .map((doc) => ChatMessage.fromFirestore(doc))
+        .toList();
+  }
+
+  // Debug method to get local storage contents for testing
+  static Future<Map<String, dynamic>> debugReadLocalData() async {
+    return await _readLocalData();
+  }
+
+  // Debug method to get local file path for testing
+  static Future<String> debugGetLocalFilePath() async {
+    final file = await _getLocalFile();
+    return file.path;
   }
 
   // Delete all chat sessions for a user

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:aichat/services/chat_service.dart';
 
 class AdminQAEntryPage extends StatefulWidget {
   const AdminQAEntryPage({Key? key}) : super(key: key);
@@ -14,6 +15,7 @@ class _AdminQAEntryPageState extends State<AdminQAEntryPage> {
   final _tagsController = TextEditingController();
 
   String? _editingDocId;
+  bool _isSaving = false;
 
   Future<void> _addQA() async {
     final question = _questionController.text.trim();
@@ -27,36 +29,66 @@ class _AdminQAEntryPageState extends State<AdminQAEntryPage> {
 
     if (question.isEmpty || answer.isEmpty) return;
 
-    if (_editingDocId != null) {
-      // Хэрэв засвар хийж байгаа бол
-      await FirebaseFirestore.instance
-          .collection('questions')
-          .doc(_editingDocId)
-          .update({
-        'question': question,
-        'answer': answer,
-        'tags': tags,
-        'updatedAt': Timestamp.now(),
-      });
-      _editingDocId = null;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Асуулт амжилттай засварлагдлаа')),
-      );
-    } else {
-      // Шинээр нэмж байгаа бол
-      await FirebaseFirestore.instance.collection('questions').add({
-        'question': question,
-        'answer': answer,
-        'tags': tags,
-        'createdAt': Timestamp.now(),
-        'createdBy': 'admin',
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Асуулт амжилттай нэмэгдлээ')),
-      );
-    }
+    setState(() {
+      _isSaving = true;
+    });
 
-    _resetForm();
+    try {
+      if (_editingDocId != null) {
+        // Хэрэв засвар хийж байгаа бол
+        await FirebaseFirestore.instance
+            .collection('questions')
+            .doc(_editingDocId)
+            .update({
+          'question': question,
+          'answer': answer,
+          'tags': tags,
+          'updatedAt': Timestamp.now(),
+        });
+
+        // Давхар локал хадгалалт хийх
+        await ChatService.saveQuestionAnswerLocally(
+          question: question,
+          answer: answer,
+          tags: tags,
+        );
+
+        _editingDocId = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Асуулт амжилттай засварлагдлаа')),
+        );
+      } else {
+        // Шинээр нэмж байгаа бол
+        // Firebase-д хадгалах
+        await FirebaseFirestore.instance.collection('questions').add({
+          'question': question,
+          'answer': answer,
+          'tags': tags,
+          'createdAt': Timestamp.now(),
+          'createdBy': 'admin',
+        });
+
+        // Давхар локал хадгалалт хийх
+        await ChatService.saveQuestionAnswerLocally(
+          question: question,
+          answer: answer,
+          tags: tags,
+        );
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Асуулт амжилттай нэмэгдлээ')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Алдаа гарлаа: $e')),
+      );
+    } finally {
+      setState(() {
+        _isSaving = false;
+      });
+      _resetForm();
+    }
   }
 
   void _resetForm() {
@@ -68,10 +100,20 @@ class _AdminQAEntryPageState extends State<AdminQAEntryPage> {
   }
 
   Future<void> _deleteQA(String id) async {
-    await FirebaseFirestore.instance.collection('questions').doc(id).delete();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Асуулт устгагдлаа')),
-    );
+    try {
+      // Firebase-ээс устгах
+      await FirebaseFirestore.instance.collection('questions').doc(id).delete();
+
+      // Локал хадгалалтаас устгах шаардлагатай бол энд код нэмнэ
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Асуулт устгагдлаа')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Устгахад алдаа гарлаа: $e')),
+      );
+    }
   }
 
   void _editQA(String id, Map<String, dynamic> data) {
@@ -119,12 +161,14 @@ class _AdminQAEntryPageState extends State<AdminQAEntryPage> {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 ElevatedButton(
-                  onPressed: _addQA,
-                  child: Text(_editingDocId == null ? 'Нэмэх' : 'Хадгалах'),
+                  onPressed: _isSaving ? null : _addQA,
+                  child: _isSaving
+                      ? const CircularProgressIndicator(strokeWidth: 2)
+                      : Text(_editingDocId == null ? 'Нэмэх' : 'Хадгалах'),
                 ),
                 if (_editingDocId != null)
                   TextButton(
-                    onPressed: _resetForm,
+                    onPressed: _isSaving ? null : _resetForm,
                     child: const Text('Цуцлах'),
                   ),
               ],
@@ -137,9 +181,26 @@ class _AdminQAEntryPageState extends State<AdminQAEntryPage> {
                     .orderBy('createdAt', descending: true)
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (!snapshot.hasData)
-                    return const CircularProgressIndicator();
+                  if (ChatService.isOffline) {
+                    return const Center(
+                      child: Text(
+                        'Оффлайн горимд Firebase өгөгдөл харах боломжгүй',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    );
+                  }
+
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
                   final docs = snapshot.data!.docs;
+
+                  if (docs.isEmpty) {
+                    return const Center(
+                        child: Text('Асуулт хариулт хоосон байна'));
+                  }
+
                   return ListView.builder(
                     itemCount: docs.length,
                     itemBuilder: (context, index) {

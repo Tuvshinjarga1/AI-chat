@@ -43,6 +43,8 @@ dependencies:
   fl_chart: ^0.71.0
   intl: ^0.20.2
   dotenv: ^4.2.0
+  path_provider: ^2.1.5
+  connectivity_plus: ^6.1.4
 
 dev_dependencies:
   flutter_test:
@@ -66,7 +68,8 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  # assets:
+  assets:
+    - lib/offline/local.json
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
 

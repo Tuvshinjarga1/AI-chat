@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:aichat/admin/admin_ui.dart';
 import 'package:aichat/admin/dashboard.dart';
 import 'package:aichat/services/auth_service.dart';
+import 'package:aichat/services/chat_service.dart';
+import 'dart:math';
 
 class AdminPanel extends StatefulWidget {
   const AdminPanel({Key? key}) : super(key: key);
@@ -269,6 +271,17 @@ class _AdminPanelState extends State<AdminPanel> {
         selectedTileColor: Colors.white.withOpacity(0.1),
         onTap: () => _onItemTapped(2),
       ),
+      Divider(color: Colors.white30, height: 1),
+      ListTile(
+        leading: Icon(Icons.storage, color: Colors.white70),
+        title: Text(
+          'Локал хадгалалт шалгах',
+          style: TextStyle(color: Colors.white70),
+        ),
+        onTap: () async {
+          _checkLocalStorage();
+        },
+      ),
     ];
   }
 
@@ -319,5 +332,76 @@ class _AdminPanelState extends State<AdminPanel> {
         ),
       ),
     );
+  }
+
+  // Check local storage contents
+  Future<void> _checkLocalStorage() async {
+    try {
+      final localData = await ChatService.debugReadLocalData();
+      final path = await ChatService.debugGetLocalFilePath();
+
+      final qaCount = localData['qa_pairs']?.length ?? 0;
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Локал хадгалалтын мэдээлэл'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Файлын зам:'),
+                Text(path, style: TextStyle(fontWeight: FontWeight.bold)),
+                SizedBox(height: 16),
+                Text('Асуулт хариултын тоо: $qaCount'),
+                SizedBox(height: 16),
+                if (qaCount > 0) ...[
+                  Text('Сүүлийн 5 асуулт хариулт:'),
+                  SizedBox(height: 8),
+                  ...List.generate(
+                    min(5, qaCount),
+                    (index) {
+                      final qa = localData['qa_pairs'][qaCount - 1 - index];
+                      return Card(
+                        margin: EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Асуулт: ${qa['question']}',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.bold)),
+                              Text('Хариулт: ${qa['answer']}'),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ] else
+                  Text('Локал хадгалалт хоосон байна.'),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Хаах'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Алдаа гарлаа: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }

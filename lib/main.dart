@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'package:aichat/auth/login_bottom_sheet.dart';
 import 'package:aichat/screens/chat_session.dart';
+import 'dart:math';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +23,7 @@ void main() async {
   );
   await AuthService.initialize();
   await AuthService.setupInitialAdmins();
+  await ChatService.initialize();
   runApp(const MyApp());
 }
 
@@ -68,6 +70,7 @@ class _ChatPageState extends State<MyHomePage>
   List<Map<String, dynamic>> _chatSessions = [];
   bool _isLoading = false;
   late AnimationController _dotAnimationController;
+  bool _isOfflineMode = false;
 
   // Check if State is mounted to avoid "setState() called after dispose()" error
   bool _mounted = true;
@@ -81,8 +84,15 @@ class _ChatPageState extends State<MyHomePage>
       vsync: this,
     )..repeat();
     _checkLoginStatus();
+    _checkConnectivity();
     _addWelcomeMessage();
     _loadChatSessions();
+  }
+
+  Future<void> _checkConnectivity() async {
+    safeSetState(() {
+      _isOfflineMode = ChatService.isOffline;
+    });
   }
 
   @override
@@ -238,15 +248,23 @@ class _ChatPageState extends State<MyHomePage>
     } else {
       // Ask if user wants to search with Gemini
       safeSetState(() {
-        _messages.add({
-          "from": "bot",
-          "text": "Манай мэдээллийн санд олдсонгүй. Дэлгэрэнгүй хайх уу?",
-          "action": true
-        });
+        if (ChatService.isOffline) {
+          _messages.add({
+            "from": "bot",
+            "text":
+                "Интернэт холболт байхгүй тул хариу өгөх боломжгүй байна. Интернэт холболтоо шалгана уу.",
+          });
+        } else {
+          _messages.add({
+            "from": "bot",
+            "text": "Манай мэдээллийн санд олдсонгүй. Дэлгэрэнгүй хайх уу?",
+            "action": true
+          });
+        }
       });
 
       // Save bot response if logged in
-      if (_isLoggedIn) {
+      if (_isLoggedIn && !ChatService.isOffline) {
         await ChatService.saveMessage(
           userId: AuthService.currentUser!.id,
           text: "Манай мэдээллийн санд олдсонгүй. Дэлгэрэнгүй хайх уу?",
@@ -382,6 +400,14 @@ class _ChatPageState extends State<MyHomePage>
                 },
               ),
               ListTile(
+                leading: Icon(Icons.storage),
+                title: Text('Локал хадгалалт шалгах'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  _checkLocalStorage();
+                },
+              ),
+              ListTile(
                 leading: Icon(Icons.logout),
                 title: Text('Гарах'),
                 onTap: () async {
@@ -397,6 +423,85 @@ class _ChatPageState extends State<MyHomePage>
         );
       },
     );
+  }
+
+  // Check local storage contents
+  Future<void> _checkLocalStorage() async {
+    safeSetState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final localData = await ChatService.debugReadLocalData();
+      final path = await ChatService.debugGetLocalFilePath();
+
+      final qaCount = localData['qa_pairs']?.length ?? 0;
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Локал хадгалалтын мэдээлэл'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Файлын зам:'),
+                Text(path, style: TextStyle(fontWeight: FontWeight.bold)),
+                SizedBox(height: 16),
+                Text('Асуулт хариултын тоо: $qaCount'),
+                SizedBox(height: 16),
+                if (qaCount > 0) ...[
+                  Text('Сүүлийн 5 асуулт хариулт:'),
+                  SizedBox(height: 8),
+                  ...List.generate(
+                    min(5, qaCount),
+                    (index) {
+                      final qa = localData['qa_pairs'][qaCount - 1 - index];
+                      return Card(
+                        margin: EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Асуулт: ${qa['question']}',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.bold)),
+                              Text('Хариулт: ${qa['answer']}'),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ] else
+                  Text('Локал хадгалалт хоосон байна.'),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Хаах'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Алдаа гарлаа: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      safeSetState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -433,6 +538,20 @@ class _ChatPageState extends State<MyHomePage>
           ],
         ),
         actions: [
+          if (ChatService.isOffline)
+            IconButton(
+              icon: Icon(Icons.cloud_off),
+              color: Colors.red[300],
+              tooltip: 'Оффлайн горим',
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        'Та оффлайн горимд байна. Зөвхөн локал сангаас хариултыг авах боломжтой.'),
+                  ),
+                );
+              },
+            ),
           if (_isLoggedIn)
             IconButton(
               icon: const Icon(Icons.history),
